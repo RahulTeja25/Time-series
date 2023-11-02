@@ -1,0 +1,277 @@
+---
+title: "sshaik3_rveerava_smyla_project_2"
+author: "Rahul teja Veeravarapu, Sameer Shaik, Sai Bhavya Myla"
+date: "2023-05-02"
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
+---
+```{r}
+# Load the time series data set
+df<- read.csv("oil.csv", header = TRUE)
+print(df)
+
+```
+
+```{r}
+str(df)
+```
+
+```{r}
+# Convert the date column to a date object
+df$date <- as.Date(df$date)
+str(df)
+```
+
+```{r}
+## Time series plot for the Original data
+library(ggplot2)
+ggplot(data =df, aes(x = date, y = dcoilwtico)) +
+  geom_line() +
+  labs(x = "Year", y = "Price ", title = "Oil Prices")
+```
+
+```{r}
+# Impute missing values using forward fill
+library(zoo)
+df$dcoilwtico[is.na(df$dcoilwtico)][1] <- df$dcoilwtico[which(!is.na(df$dcoilwtico))][1]
+df$price <- na.locf(df$dcoilwtico)
+df <- subset(df, select = -dcoilwtico)
+print(df)
+
+```
+
+```{r}
+## Time series plot for the modified data
+library(ggplot2)
+ggplot(data =df, aes(x = date, y = price)) +
+  geom_line() +
+  labs(x = "Year", y = "Price ", title = "Oil Prices")
+
+```
+
+```{r}
+## creating a time series object
+
+oil_ts <- ts(data = df$price, start = c(2013,1), end = c(2017,8), frequency = 12 )
+oil_ts
+
+```
+
+```{r}
+library(ggfortify)
+library(magrittr)
+
+oil_ts %>% autoplot()
+
+
+oilprice_decomposed <- decompose(oil_ts)
+oilprice_decomposed %>% autoplot()
+
+```
+
+```{r}
+# Fit a linear regression model to the data fro checking trend component
+
+model <- lm(oil_ts ~ time(oil_ts))
+
+trend <- coef(model)[2]
+
+if (trend > 0) {
+  cat("The time series has an upward trend.\n")
+} else if (trend < 0) {
+  cat("The time series has a downward trend.\n")
+} else {
+  cat("The time series has no trend.\n")
+}
+```
+<p> from the above inference there is seasonal and trend components in the data </p>
+```{r}
+# set the ratio for test and train data
+test_ratio <- 0.2
+train_ratio <- 0.8
+split_index <- floor(length(oil_ts) * train_ratio)
+oilprice_train <- head(oil_ts, split_index)
+oilprice_test <- tail(oil_ts, length(oil_ts) - split_index)
+length(oilprice_train)
+length(oilprice_test)
+```
+
+```{r}
+print(oilprice_test)
+```
+
+```{r}
+# ETS Holt-Winters
+library(forecast)
+oilprice_ets <- ets(oil_ts, model = "ZZZ")
+summary(oilprice_ets)
+```
+
+```{r}
+forecast_horizon <- max(length(oilprice_test), 5)
+oilprice_ets_forecast <- forecast(oilprice_ets, h = forecast_horizon)
+oilprice_ets_forecast
+```
+
+```{r}
+# check accuracy
+library(Metrics)
+rmse(oilprice_ets_forecast$mean, oilprice_test[1:forecast_horizon])
+```
+
+```{r fig.keep="all"}
+autoplot(oilprice_ets_forecast, series = "ETS", fcol = "red") +
+  autolayer(oil_ts, series = "Actual", color = "black") + 
+  labs(subtitle = "Oil Prices, from Jan 2013 - Aug 2017",
+       y = "Oil Price ")
+```
+
+```{r}
+# Seasonal ARIMA
+oilprice_train <- ts(oilprice_train, frequency = 12)
+oilprice_sarima <- stlm(oilprice_train, method = "arima", lambda = 0)
+summary(oilprice_sarima)
+```
+
+```{r}
+oilprice_sarima_forecast <- forecast(oilprice_sarima, h = length(oilprice_test))
+oilprice_sarima_forecast
+```
+
+```{r}
+rmse(oilprice_sarima_forecast$mean, oilprice_test)
+```
+
+```{r fig.keep="all"}
+autoplot(oilprice_sarima_forecast, series = "sarima", fcol = "red") +
+  autolayer(oil_ts, series = "Actual", color = "black") + 
+  labs(subtitle = "Oil Prices, from Jan 2013 - Aug 2017",
+       y = "Oil Price ")
+```
+
+```{r}
+# Fit TBATS model to training data
+oilprice_tbats <- tbats(oilprice_train)
+summary(oilprice_tbats)
+```
+
+```{r}
+oilprice_tbats_forecast <- forecast(oilprice_tbats, h = length(oilprice_test))
+rmse(oilprice_tbats_forecast$mean, oilprice_test)
+```
+
+```{r fig.keep="all"}
+autoplot(oilprice_tbats_forecast, series = "tbats", fcol = "red") +
+  autolayer(oil_ts, series = "Actual", color = "black") + 
+  labs(subtitle = "Oil Prices, from Jan 2013 - Aug 2017",
+       y = "Oil Price ")
+```
+
+```{r}
+
+library(prophet)
+oilprice <- data.frame(ds = index(oilprice_train), y = coredata(oilprice_train))
+oilprice <- data.frame(ds = as.Date(index(oilprice_train)), y = coredata(oilprice_train))
+colnames(oilprice) <- c("ds", "y")
+prophet_model <- prophet(yearly.seasonality = TRUE, weekly.seasonality = TRUE)
+prophet_model <- add_seasonality(prophet_model, name = "monthly", period = 30.5, fourier.order = 5)
+prophet_model <- fit.prophet(prophet_model, oilprice)
+summary(prophet_model)
+```
+
+```{r}
+prophet_forecast <- predict(prophet_model, h = length(oilprice_test))
+prophet_forecast <- tail(prophet_forecast$yhat, n = length(oilprice_test))
+rmse(prophet_forecast, oilprice_test)
+```
+
+```{r}
+library(forecast)
+arima_model <- auto.arima(oilprice_train, seasonal = FALSE)
+summary(arima_model)
+```
+
+```{r}
+arima_forecast <- forecast(arima_model, h = length(oilprice_test))
+arima_forecast
+```
+
+```{r}
+rmse(arima_forecast$mean, oilprice_test)
+```
+
+```{r  fig.keep="all"}
+autoplot(arima_forecast, series = "ARIMA", fcol = "blue") +
+  autolayer(oil_ts, series = "Actual", color = "black") +
+  labs(subtitle = "Oil Prices, from Jan 2013 - Aug 2017",
+       y = "Oil Price ")
+```
+
+
+```{r}
+## Evaluating using the RMSE values for each model
+
+library(Metrics)
+data.frame(ETS = rmse(oilprice_ets_forecast$mean, oilprice_test[1:forecast_horizon]), 
+           SARIMA = rmse(oilprice_sarima_forecast$mean, oilprice_test),
+           TBATS = rmse(oilprice_tbats_forecast$mean, oilprice_test),PROPHET =rmse(prophet_forecast, oilprice_test), ARIMA = rmse(arima_forecast$mean, oilprice_test))
+```
+
+```{r}
+```
+
+```{r}
+```
+
+```{r}
+```
+
+```{r}
+```
+
+```{r}
+```
+
+```{r}
+```
+
+```{r}
+```
+
+```{r}
+```
+
+```{r}
+```
+
+```{r}
+```
+
+```{r}
+```
+
+```{r}
+```
+
+```{r}
+```
+
+```{r}
+```
+
+```{r}
+```
+
+```{r}
+```
+
+```{r}
+```
+
+```{r}
+```
+
+```{r}
+```
